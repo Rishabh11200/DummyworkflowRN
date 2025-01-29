@@ -1,0 +1,64 @@
+name: Install dependencies and run project
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  cancel-previous-runs:
+    runs-on: [self-hosted, macOS, X64]
+    steps:
+      - name: Cancel previous runs
+        uses: styfle/cancel-workflow-action@0.9.1
+
+  checkout-and-install:
+    needs: cancel-previous-runs
+    runs-on: [self-hosted, macOS, X64]
+    steps:
+      - name: Checkout repo from main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Install npm dependency
+        run: yarn install --frozen-lockfile
+
+  install-pods:
+    needs: checkout-and-install
+    runs-on: [self-hosted, macOS, X64]
+    steps:
+      - name: Cache cocoapods
+        uses: actions/cache@v3
+        with:
+          path: ios/Pods
+          key: ${{ runner.os }}-pods-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+
+      - name: Install pod dependency
+        run: |
+          cd ios
+          pod install
+
+  generate-ios-bundle:
+    needs: install-pods
+    runs-on: [self-hosted, macOS, X64]
+    steps:
+      - name: Build iOS archive
+        run: |
+          cd ios
+          xcodebuild -workspace MoveMatic.xcworkspace \
+                    -scheme MoveMatic \
+                    -sdk iphoneos \
+                    -configuration Release \
+                    -archivePath $PWD/build/MoveMatic.xcarchive \
+                    clean archive
+
+      - name: Export iOS archive as IPA
+        run: |
+          xcodebuild -exportArchive \
+                    -archivePath $PWD/build/MoveMatic.xcarchive \
+                    -exportOptionsPlist ExportOptions.plist \
+                    -exportPath $PWD/build/MoveMatic.ipa
