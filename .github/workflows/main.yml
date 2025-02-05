@@ -7,58 +7,108 @@ on:
   workflow_dispatch:
 
 jobs:
-  cancel-previous-runs:
-    runs-on: [self-hosted, macOS, X64]
+  # Install dependencies using yarn
+  install-dependencies:
+    runs-on: [ self-hosted, macOS, X64 ]
+    strategy:
+      matrix:
+        build-type: [ Release ]
+
     steps:
-      - name: Cancel previous runs
-        uses: styfle/cancel-workflow-action@0.9.1
+    - name: Show self-hosted machine infomation
+      run: uname -a
 
-  checkout-and-install:
-    needs: cancel-previous-runs
-    runs-on: [self-hosted, macOS, X64]
-    steps:
-      - name: Checkout repo from main branch
-        uses: actions/checkout@v4
-        with:
-          ref: main
+    - name: Cancel previous runs
+      uses: styfle/cancel-workflow-action@0.9.1
 
-      - name: Install npm dependency
-        run: yarn install --frozen-lockfile
+    - name: Checkout repo from dev branch
+      uses: actions/checkout@v4
+      with:
+        ref: main
 
-  install-pods:
-    needs: checkout-and-install
-    runs-on: [self-hosted, macOS, X64]
-    steps:
-      - name: Cache cocoapods
-        uses: actions/cache@v3
-        with:
-          path: ios/Pods
-          key: ${{ runner.os }}-pods-${{ hashFiles('ios/Podfile.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-pods-
+    - name: Install npm dependency
+      run: yarn install
 
-      - name: Install pod dependency
-        run: |
-          cd ios
-          pod install
+    # Jobs for Android Building:
 
-  generate-ios-bundle:
-    needs: install-pods
-    runs-on: [self-hosted, macOS, X64]
-    steps:
-      - name: Build iOS archive
-        run: |
-          cd ios
-          xcodebuild -workspace MoveMatic.xcworkspace \
-                    -scheme MoveMatic \
-                    -sdk iphoneos \
-                    -configuration Release \
-                    -archivePath $PWD/build/MoveMatic.xcarchive \
-                    clean archive
+    # Step 1: Cache Gradle Wrapper
+    - name: Cache Gradle Wrapper
+      uses: actions/cache@v4.0.2
+      with:
+        path: ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
 
-      - name: Export iOS archive as IPA
-        run: |
-          xcodebuild -exportArchive \
-                    -archivePath $PWD/build/MoveMatic.xcarchive \
-                    -exportOptionsPlist ExportOptions.plist \
-                    -exportPath $PWD/build/MoveMatic.ipa
+    # Step 2: Cache Gradle Dependencies
+    - name: Cache Gradle Dependencies
+      uses: actions/cache@v4.0.2
+      with:
+        path: ~/.gradle/caches
+        key: ${{ runner.os }}-gradle-caches-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-caches-
+
+    # Step 3: Make Gradlew Executable
+    - name: Make Gradlew Executable
+      run: chmod +x android/gradlew
+
+    # Step 4: Generate ${{ matrix.build-type }} APK
+    - name: Generate ${{ matrix.build-type }} APK
+      run: |
+        cd android
+        ./gradlew assemble${{ matrix.build-type }}
+
+    # Step 5: Generate ${{ matrix.build-type }} Bundle
+    - name: Generate ${{ matrix.build-type }} Bundle
+      run: |
+        cd android
+        ./gradlew bundle${{ matrix.build-type }}
+
+    # Step 6: Upload ${{ matrix.build-type }} APK and Bundle as artifacts
+    - name: Upload ${{ matrix.build-type }} APK and Bundle as artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-${{ matrix.build-type }}-files
+        path: |
+          MoveMatic/android/app/build/outputs/apk/${{ matrix.build-type }}/app-${{ matrix.build-type }}.apk
+          MoveMatic/android/app/build/outputs/bundle/${{ matrix.build-type }}/app-${{ matrix.build-type }}.aab
+
+    # Jobs for iOS Building:
+
+    # Step 1: Cache CocoaPods
+    - name: Cache CocoaPods
+      uses: actions/cache@v3
+      with:
+        path: ios/Pods
+        key: ${{ runner.os }}-pods-${{ hashFiles('**/Podfile.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-pods-
+
+    # Step 2: Install pod dependency
+    - name: Install pod dependency
+      run: |
+        cd ios
+        # Remove podfile.lock to avoid conflicts
+        rm Podfile.lock
+        # Install pod dependencies
+        pod install
+
+    # Step 3: Generate ${{ matrix.build-type }} IPA
+    - name: Generate ${{ matrix.build-type }} IPA
+      run: |
+        cd ios
+        # Build iOS app with xcodebuild
+        xcodebuild -workspace MoveMatic.xcworkspace -scheme MoveMatic -configuration ${{ matrix.build-type }} clean build \
+        # Disable code signing
+        CODE_SIGN_IDENTITY="" \
+        CODE_SIGNING_REQUIRED=NO
+        # Copy the app to the same location as the simulator build
+        cp -r build/Build/Products/${{ matrix.build-type }}-iphoneos/MoveMatic.app build/Build/Products/${{ matrix.build-type }}-iphonesimulator/MoveMatic.app
+
+    # Step 4: Upload ${{ matrix.build-type }} IPA as artifacts
+    - name: Upload ${{ matrix.build-type }} IPA as artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ios-${{ matrix.build-type }}-files
+        path: |
+          ios/build/Build/Products/${{ matrix.build-type }}-iphoneos/MoveMatic.app
+          ios/build/Build/Products/${{ matrix.build-type }}-iphonesimulator/MoveMatic.app
