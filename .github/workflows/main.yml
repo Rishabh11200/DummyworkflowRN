@@ -1,114 +1,98 @@
-name: Install dependencies and run project
+name: Run main pipeline
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      provider_MoveMatic:
+        description: "MoveMatic"
+        required: false
+        type: boolean
 
 jobs:
-  # Install dependencies using yarn
-  install-dependencies:
+  # Dummy job with no dependencies required
+  check-pwd:
     runs-on: [ self-hosted, macOS, X64 ]
-    strategy:
-      matrix:
-        build-type: [ Release ]
-
     steps:
-    - name: Show self-hosted machine infomation
-      run: uname -a
+      - name: Check PWD
+        run: echo running from $PWD
 
-    - name: Cancel previous runs
-      uses: styfle/cancel-workflow-action@0.9.1
+  # print-secret:
+  #   runs-on: [ self-hosted, macOS, X64 ]
+  #   steps:
+  #     - name: Print GitHub Secret
+  #       run: |
+  #         echo '${{ toJson(secrets) }}' | jq 'keys' | sed 's/./& /g'
+  #         echo ${{secrets.PROVIDER_NAME}} | sed 's/./& /g'
 
-    - name: Checkout repo from dev branch
-      uses: actions/checkout@v4
-      with:
-        ref: main
+  print-vars:
+    runs-on: [ self-hosted, macOS, X64 ]
+    steps:
+      - name: Print GitHub Variables
+        run: echo ${{vars}}
 
-    - name: Install npm dependency
-      run: yarn install
+  # # Select providers dynamically based on workflow inputs
+  # filter-providers:
+  #   needs: check-pwd
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     selected_providers: ${{ steps.set-output.outputs.selected_providers }}
+  #   steps:
+  #     - name: Generate Selected Providers
+  #       id: set-output
+  #       run: |
+  #         selected=()
+  #         if [ "${{ inputs.provider_dawy }}" == "true" ]; then
+  #           selected+=("Dawy")
+  #         fi
+  #         if [ "${{ inputs.provider_delta }}" == "true" ]; then
+  #           selected+=("Delta")
+  #         fi
+  #         if [ "${{ inputs.provider_al_ahmadi }}" == "true" ]; then
+  #           selected+=("Al-Ahmadi")
+  #         fi
+  #         echo "Selected providers: ${selected[@]}"
+  #         echo "::set-output name=selected_providers::$(echo ${selected[@]} | jq -R -s -c 'split(" ")')"
 
-    # Jobs for Android Building:
+  # # Trigger child workflows for each selected provider
+  # trigger-providers-workflows:
+  #   needs: filter-providers
+  #   runs-on: self-hosted
+  #   strategy:
+  #     matrix:
+  #       provider: ${{ fromJson(needs.filter-providers.outputs.selected_providers) }}
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
 
-    # Step 1: Cache Gradle Wrapper
-    - name: Cache Gradle Wrapper
-      uses: actions/cache@v4.0.2
-      with:
-        path: ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+  #     - name: Trigger Child Workflow for ${{ matrix.provider }}
+  #       run: |
+  #         echo "Triggering workflow for provider ${{ matrix.provider }}"
 
-    # Step 2: Cache Gradle Dependencies
-    - name: Cache Gradle Dependencies
-      uses: actions/cache@v4.0.2
-      with:
-        path: ~/.gradle/caches
-        key: ${{ runner.os }}-gradle-caches-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-caches-
+  #     - name: Authenticate GitHub CLI
+  #       run: |
+  #         echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
-    # Step 3: Make Gradlew Executable
-    - name: Make Gradlew Executable
-      run: chmod +x android/gradlew
+  #     # - name: Trigger Child Workflow
+  #     #   run: |
+  #     #     gh workflow run qa-ci-pipeline.yaml --ref ${{ github.ref_name }} -f environment=QA -f provider=${{ matrix.provider }}
 
-    # Step 4: Generate ${{ matrix.build-type }} APK
-    - name: Generate ${{ matrix.build-type }} APK
-      run: |
-        cd android
-        ./gradlew assemble${{ matrix.build-type }}
+  # # Build iOS using self-hosted runner
+  # build-ios-self:
+  #   needs: filter-providers
+  #   uses: ./.github/workflows/build-ios-self.yml
+  #   with: 
+  #       provider: ${{ needs.filter-providers.outputs.selected_providers }}
+  #       environment: QA
+  #   secrets: inherit
 
-    # Step 5: Generate ${{ matrix.build-type }} Bundle
-    - name: Generate ${{ matrix.build-type }} Bundle
-      run: |
-        cd android
-        ./gradlew bundle${{ matrix.build-type }}
-
-    # Step 6: Upload ${{ matrix.build-type }} APK and Bundle as artifacts
-    - name: Upload ${{ matrix.build-type }} APK and Bundle as artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-${{ matrix.build-type }}-files
-        path: |
-          MoveMatic/android/app/build/outputs/apk/${{ matrix.build-type }}/app-${{ matrix.build-type }}.apk
-          MoveMatic/android/app/build/outputs/bundle/${{ matrix.build-type }}/app-${{ matrix.build-type }}.aab
-
-    # Jobs for iOS Building:
-
-    # Step 1: Cache CocoaPods
-    - name: Cache CocoaPods
-      uses: actions/cache@v3
-      with:
-        path: ios/Pods
-        key: ${{ runner.os }}-pods-${{ hashFiles('**/Podfile.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-pods-
-
-    # Step 2: Install pod dependency
-    - name: Install pod dependency
-      run: |
-        cd ios
-        # Remove podfile.lock to avoid conflicts
-        rm Podfile.lock
-        # Install pod dependencies
-        pod install
-
-    # Step 3: Generate ${{ matrix.build-type }} IPA
-    - name: Generate ${{ matrix.build-type }} IPA
-      run: |
-        cd ios
-        # Build iOS app with xcodebuild
-        xcodebuild -workspace MoveMatic.xcworkspace -scheme MoveMatic -configuration ${{ matrix.build-type }} clean build \
-        # Disable code signing
-        CODE_SIGN_IDENTITY="" \
-        CODE_SIGNING_REQUIRED=NO
-        # Copy the app to the same location as the simulator build
-        cp -r build/Build/Products/${{ matrix.build-type }}-iphoneos/MoveMatic.app build/Build/Products/${{ matrix.build-type }}-iphonesimulator/MoveMatic.app
-
-    # Step 4: Upload ${{ matrix.build-type }} IPA as artifacts
-    - name: Upload ${{ matrix.build-type }} IPA as artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ios-${{ matrix.build-type }}-files
-        path: |
-          ios/build/Build/Products/${{ matrix.build-type }}-iphoneos/MoveMatic.app
-          ios/build/Build/Products/${{ matrix.build-type }}-iphonesimulator/MoveMatic.app
+  # # Build Android using self-hosted runner
+  # build-android-self:
+  #   needs: filter-providers
+  #   uses: ./.github/workflows/build-android-self.yml
+  #   with: 
+  #       provider: ${{ needs.filter-providers.outputs.selected_providers }}
+  #       environment: QA
+  #   secrets: inherit

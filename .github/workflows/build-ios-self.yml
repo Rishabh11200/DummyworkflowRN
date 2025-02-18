@@ -1,0 +1,68 @@
+name: QA CI iOS Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: 'Provider Name'
+        required: true
+        type: string
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        type: string
+
+jobs:
+  print-inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print Inputs
+        run: |
+          echo "iOS Pipeline Triggered for Provider ${{ github.event.inputs.provider }}"
+          echo "Environment ${{ github.event.inputs.environment }}"
+
+  build-ios:
+    runs-on: [ self-hosted, macOS, X64 ]
+    defaults:
+      run:
+        working-directory: ./dawy
+
+    steps:
+      - name: Cache cocoapods
+        uses: actions/cache@v3
+        with:
+          path: /ios/Pods
+          key: ${{ runner.os }}-pods-${{ hashFiles('**/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+
+      - name: Install pod dependency
+        run: |
+          cd ios
+          rm Podfile.lock
+          pod install
+
+      - name: Build iOS JS Bundle
+        run: yarn run package-ios
+
+      - name: Build iOS archive
+        run: |
+          cd ios
+          xcodebuild -workspace dawy.xcworkspace \
+                    -scheme dawy \
+                    -sdk iphoneos \
+                    -configuration Release \
+                    -archivePath $PWD/build/dawy.xcarchive \
+                    clean archive
+
+      - name: Export iOS archive as IPA
+        run: |
+          xcodebuild -exportArchive \
+                    -archivePath $PWD/build/dawy.xcarchive \
+                    -exportPath $PWD/build/dawy.ipa
+
+      - name: Upload IPA as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-file
+          path: ios/build/dawy.ipa
